@@ -1,18 +1,924 @@
-import streamlit as st import pandas as pd 
-import base64 from pathlib 
-import Path from io import BytesIO 
+import streamlit as st
+import pandas as pd
+import base64
+from pathlib import Path
+from io import BytesIO
 from datetime import datetime
-import streamlit as st import pandas as pd import base64 from pathlib import Path from io import BytesIO from datetime import datetime
-# ===================================================== 
-# 1. CẤU HÌNH # 
-===================================================== 
-st.set_page_config( page_title="FINOVA | Ngân hàng số", page_icon="🏦", layout="wide", initial_sidebar_state="expanded" ) 
-# ===================================================== 
-# 2. CSS - GIAO DIỆN NGÂN HÀNG 
-# ===================================================== st.markdown(""" <style> @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap'); html, body, [class*="css"] { font-family: 'Be Vietnam Pro', sans-serif; } .stApp { background: #f3f6fc; } .block-container { max-width: 1450px; padding-top: 1.5rem; } [data-testid="stSidebar"] { background: linear-gradient(180deg, #081631, #17467b); } [data-testid="stSidebar"] * { color: white; } [data-testid="stSidebar"] input { color: #102344 !important; } .hero { border-radius: 22px; padding: 38px; min-height: 275px; background-size: cover; background-position: center; color: white; box-shadow: 0 12px 35px rgba(9, 30, 66, .16); margin-bottom: 25px; } .hero h1 { font-size: 36px; font-weight: 800; color: white; } .hero p { color: #e4edff; font-size: 15px; } .hero-label { color: #f3d28a; font-weight: 700; letter-spacing: 3px; font-size: 12px; } .section-title { font-size: 24px; font-weight: 800; color: #11284e; margin: 12px 0; } div[data-testid="stMetric"] { background: white; padding: 18px; border-radius: 16px; border: 1px solid #e3eaf5; box-shadow: 0 5px 18px rgba(20, 40, 80, .05); } div[data-testid="stMetricLabel"] { color: #60718b; } div[data-testid="stMetricValue"] { color: #163b72; font-weight: 800; } .stButton button, .stDownloadButton button { border-radius: 11px; font-weight: 700; min-height: 42px; } .stButton button[kind="primary"] { background: linear-gradient(90deg, #112e60, #2869aa); color: white; border: none; } .footer { text-align: center; color: #75849b; font-size: 12px; padding: 25px 0; } </style> """, unsafe_allow_html=True) 
-# ===================================================== # 
-3. HÀM ĐỊNH DẠNG 
-# ===================================================== def money(value): return f"{value:,.0f} VNĐ"
+import re
+
 # =====================================================
-# 4. HÀM TÍNH LỊCH TRẢ NỢ 
-# ===================================================== def calculate_loan(amount, months, annual_rate, method): monthly_rate = annual_rate / 100 / 12 balance = float(amount) schedule = [] if method == "Dư nợ giảm dần - gốc chia đều": principal_fixed = amount / months fixed_payment = None else: principal_fixed = None if monthly_rate == 0: fixed_payment = amount / months else: fixed_payment = ( amount * monthly_rate * (1 + monthly_rate) ** months / ((1 + monthly_rate) ** months - 1) ) for month in range(1, months + 1): opening_balance = balance interest = opening_balance * monthly_rate if method == "Dư nợ giảm dần - gốc chia đều": principal = min(principal_fixed, opening_balance) else: principal = min( max(fixed_payment - interest, 0), opening_balance ) # Thanh toán hết phần gốc còn lại ở kỳ cuối if month == months: principal = opening_balance payment = principal + interest balance = max(0, opening_balance - principal) schedule.append({ "Tháng": month, "Dư nợ đầu kỳ": opening_balance, "Gốc phải trả": principal, "Lãi phải trả": interest, "Tổng phải trả": payment, "Dư nợ cuối kỳ": balance }) return pd.DataFrame(schedule) # ===================================================== # 5. CHATBOT HỎI ĐÁP # ===================================================== def chatbot_answer(question, df, amount, months, rate, purpose, method, income): q = question.lower().strip() first = df.iloc[0] last = df.iloc[-1] total_interest = df["Lãi phải trả"].sum() total_payment = df["Tổng phải trả"].sum() if any(x in q for x in ["xin chào", "chào", "hello", "hi"]): return ( "👋 Xin chào! Tôi là trợ lý FINOVA.\n\n" "Bạn có thể hỏi về khoản vay, lãi suất, " "lịch trả nợ, CIC, nợ xấu, trả trước hạn, " "mua nhà, mua xe và cách quản lý tài chính." ) if any(x in q for x in ["tháng đầu", "tháng 1", "kỳ đầu"]): return ( f"💳 Tháng đầu bạn dự kiến trả " f"{money(first['Tổng phải trả'])}.\n\n" f"• Tiền gốc: {money(first['Gốc phải trả'])}\n\n" f"• Tiền lãi: {money(first['Lãi phải trả'])}" ) if any(x in q for x in ["tháng cuối", "kỳ cuối"]): return ( f"📅 Tháng cuối dự kiến thanh toán " f"{money(last['Tổng phải trả'])}." ) if any(x in q for x in ["tổng lãi", "tiền lãi", "lãi hết"]): return ( f"📈 Tổng lãi dự kiến: {money(total_interest)}.\n\n" "Đây là kết quả mô phỏng với lãi suất cố định, " "chưa bao gồm phí và các điều chỉnh của ngân hàng." ) if any(x in q for x in [ "tổng phải trả", "tổng tiền trả", "tổng thanh toán" ]): return f"💰 Tổng gốc và lãi dự kiến: {money(total_payment)}." if any(x in q for x in ["số tiền vay", "vay bao nhiêu"]): return f"💰 Số tiền vay hiện tại là {money(amount)}." if any(x in q for x in ["lãi suất", "phần trăm"]): return f"📈 Lãi suất đã nhập là {rate:.2f}%/năm." if any(x in q for x in ["thời hạn", "bao lâu", "mấy tháng"]): return f"📅 Thời hạn vay là {months} tháng." if any(x in q for x in ["mục đích", "vay để làm gì"]): return f"🎯 Mục đích vay đã chọn: {purpose}." if "dư nợ" in q or "còn nợ" in q: import re numbers = re.findall(r"\d+", q) if numbers and "tháng" in q: month = int(numbers[-1]) if 1 <= month <= months: balance = df.iloc[month - 1]["Dư nợ cuối kỳ"] return ( f"📉 Sau khi thanh toán tháng {month}, " f"dư nợ dự kiến còn {money(balance)}." ) return ( f"Dư nợ sau tháng đầu là " f"{money(first['Dư nợ cuối kỳ'])}." ) if any(x in q for x in ["công thức", "cách tính", "tính lãi"]): return ( "🧮 Có hai phương thức đang được mô phỏng:\n\n" "1. **Gốc chia đều:** gốc được chia đều mỗi tháng; " "lãi tính trên dư nợ đầu kỳ.\n\n" "2. **Niên kim:** khoản thanh toán định kỳ gần bằng nhau; " "phần gốc tăng dần, phần lãi giảm dần.\n\n" "Kết quả thực tế có thể khác tùy hợp đồng." ) if any(x in q for x in ["giảm lãi", "tiết kiệm lãi", "ít lãi hơn"]): return ( "💡 Bạn có thể cân nhắc vay đúng nhu cầu, " "so sánh tổng chi phí giữa các ngân hàng, " "chọn kỳ hạn phù hợp và kiểm tra phí trả nợ trước hạn." ) if any(x in q for x in ["trả trước hạn", "tất toán sớm"]): return ( "📌 Hãy kiểm tra phí tất toán trước hạn, " "dư nợ gốc thực tế và tiền lãi đến ngày thanh toán. " "Mỗi hợp đồng có thể áp dụng quy định khác nhau." ) if any(x in q for x in ["trễ hạn", "chậm trả", "quá hạn"]): return ( "⚠️ Chậm trả có thể phát sinh lãi quá hạn hoặc phí " "theo hợp đồng, đồng thời ảnh hưởng lịch sử tín dụng. " "Nếu gặp khó khăn, hãy liên hệ ngân hàng sớm." ) if any(x in q for x in ["cic", "nợ xấu", "điểm tín dụng"]): return ( "📋 Lịch sử tín dụng có thể ảnh hưởng đến việc xét duyệt " "khoản vay. Hãy thanh toán đúng hạn và kiểm tra thông tin " "qua các kênh chính thức." ) if any(x in q for x in ["ngân hàng nào", "nên vay ngân hàng"]): return ( "🏦 Khi so sánh ngân hàng, hãy kiểm tra lãi suất sau ưu đãi, " "phí hồ sơ, điều kiện bảo hiểm nếu có và phí trả trước hạn. " "Đừng chỉ so sánh lãi suất quảng cáo." ) if any(x in q for x in ["thu nhập", "khả năng trả", "tỷ lệ trả nợ"]): if income <= 0: return "Hãy nhập thu nhập hàng tháng lớn hơn 0." ratio = first["Tổng phải trả"] / income * 100 return ( f"📊 Khoản thanh toán tháng đầu chiếm " f"{ratio:.2f}% thu nhập đã nhập.\n\n" "Đây là chỉ số tham khảo; bạn cần tính thêm chi phí " "sinh hoạt và các khoản nợ khác." ) if any(x in q for x in ["bình quân", "trung bình mỗi tháng"]): average = df["Tổng phải trả"].mean() return f"📊 Thanh toán bình quân: {money(average)}/tháng." if any(x in q for x in ["mua nhà", "vay mua nhà"]): return ( "🏠 Khi vay mua nhà, hãy tính cả tiền trả trước, " "chi phí pháp lý, phí ngân hàng, nội thất và quỹ dự phòng. " "Nên kiểm tra lãi suất sau thời gian ưu đãi." ) if any(x in q for x in ["mua xe", "vay mua ô tô"]): return ( "🚗 Ngoài khoản trả góp, hãy dự trù bảo hiểm, " "đăng ký, nhiên liệu, bảo dưỡng và phí sử dụng xe." ) if any(x in q for x in ["kinh doanh", "vay vốn"]): return ( "📈 Trước khi vay kinh doanh, hãy dự báo dòng tiền, " "doanh thu, chi phí cố định và kịch bản doanh thu giảm. " "Không nên dựa hoàn toàn vào doanh thu kỳ vọng." ) if any(x in q for x in ["cảm ơn", "thanks"]): return "😊 Rất vui được hỗ trợ bạn! Bạn có thể hỏi thêm bất cứ lúc nào." return ( "🤖 Tôi có thể giúp bạn với nhiều câu hỏi hơn. " "Thử hỏi một trong các câu sau:\n\n" "• Tháng đầu phải trả bao nhiêu?\n" "• Tổng lãi của khoản vay là bao nhiêu?\n" "• Dư nợ sau tháng 12 còn bao nhiêu?\n" "• Làm thế nào để giảm chi phí lãi vay?\n" "• Trả nợ trước hạn có mất phí không?\n" "• CIC và nợ xấu là gì?\n" "• Vay mua nhà cần lưu ý gì?\n" "• Khoản vay chiếm bao nhiêu phần trăm thu nhập?" ) # ===================================================== # 6. THANH BÊN # ===================================================== with st.sidebar: st.markdown("# 🏦 FINOVA") st.caption("SMART BANKING EXPERIENCE") st.markdown("---") st.subheader("👤 Thông tin khách hàng") customer_name = st.text_input("Họ và tên") income = st.number_input( "Thu nhập hàng tháng (VNĐ)", min_value=0, value=15000000, step=500000 ) st.markdown("---") st.subheader("💰 Thông tin khoản vay") loan_amount = st.number_input( "Số tiền vay (VNĐ)", min_value=1000000, max_value=1000000000000, value=100000000, step=5000000 ) loan_term = st.number_input( "Thời hạn vay (tháng)", min_value=1, max_value=360, value=36, step=1 ) interest_rate = st.number_input( "Lãi suất (%/năm)", min_value=0.0, max_value=50.0, value=10.0, step=0.1 ) loan_purpose = st.selectbox( "Mục đích vay", [ "Vay mua nhà", "Vay mua ô tô", "Vay tiêu dùng", "Vay kinh doanh", "Vay sửa chữa nhà", "Vay học tập", "Vay khác" ] ) method = st.radio( "Phương thức trả nợ", [ "Dư nợ giảm dần - gốc chia đều", "Trả đều hàng tháng - niên kim" ] ) st.markdown("---") st.caption( "FINOVA là ứng dụng mô phỏng tài chính, " "không phải ngân hàng hoặc đơn vị cấp tín dụng." ) # ===================================================== # 7. TÍNH TOÁN # ===================================================== df = calculate_loan( loan_amount, int(loan_term), interest_rate, method ) total_interest = df["Lãi phải trả"].sum() total_payment = df["Tổng phải trả"].sum() first_month = df.iloc[0] # ===================================================== # 8. ẢNH BÌA # ===================================================== cover_path = Path("logo4.jpg") if cover_path.exists(): encoded = base64.b64encode( cover_path.read_bytes() ).decode("utf-8") hero_style = ( "background-image: linear-gradient(" "90deg, rgba(5,18,43,.96), rgba(8,31,65,.58)), " f"url('data:image/jpeg;base64,{encoded}');" "background-size:cover;background-position:center;" ) else: hero_style = ( "background:linear-gradient(120deg,#081631,#17467b,#28689c);" ) st.markdown( f""" <div class="hero" style="{hero_style}"> <div class="hero-label">FINOVA • SMART BANKING</div> <h1>Chủ động tài chính.<br>Vững bước tương lai.</h1> <p> Công cụ mô phỏng khoản vay, theo dõi lịch trả nợ và quản lý chi phí tài chính. </p> <span style=" display:inline-block; padding:8px 14px; border:1px solid #d8b46a; border-radius:30px; color:#f4d99e;"> ✦ MINH BẠCH • TRỰC QUAN • TIỆN LỢI </span> </div> """, unsafe_allow_html=True ) page = st.radio( "Điều hướng", [ "📊 Tổng quan", "🧮 Lịch trả nợ", "⚖️ So sánh khoản vay", "🤖 Chatbot", "📥 Xuất báo cáo" ], horizontal=True, label_visibility="collapsed" ) st.markdown("---") # ===================================================== # 9. TỔNG QUAN # ===================================================== if page == "📊 Tổng quan": st.markdown( '<div class="section-title">📊 TỔNG QUAN KHOẢN VAY</div>', unsafe_allow_html=True ) c1, c2, c3, c4 = st.columns(4) c1.metric("💰 Số tiền vay", money(loan_amount)) c2.metric("📈 Tổng tiền lãi", money(total_interest)) c3.metric("💳 Tổng gốc + lãi", money(total_payment)) c4.metric("📅 Thời hạn", f"{int(loan_term)} tháng") st.markdown("### 💳 Thanh toán tháng đầu") c1, c2, c3 = st.columns(3) c1.metric("Tiền gốc", money(first_month["Gốc phải trả"])) c2.metric("Tiền lãi", money(first_month["Lãi phải trả"])) c3.metric("Tổng thanh toán", money(first_month["Tổng phải trả"])) left, right = st.columns(2) with left: st.markdown("### 👤 Thông tin khoản vay") st.write(f"**Khách hàng:** {customer_name or 'Chưa nhập'}") st.write(f"**Mục đích:** {loan_purpose}") st.write(f"**Lãi suất:** {interest_rate:.2f}%/năm") st.write(f"**Phương thức:** {method}") with right: st.markdown("### 🛡️ Khả năng trả nợ") if income > 0: ratio = first_month["Tổng phải trả"] / income * 100 st.metric("Khoản trả / thu nhập", f"{ratio:.2f}%") st.progress(min(ratio / 100, 1.0)) if ratio <= 30: st.success("Tỷ lệ thanh toán kỳ đầu tương đối thấp.") elif ratio <= 50: st.warning("Hãy cân nhắc thêm chi phí sinh hoạt và nợ khác.") else: st.error("Khoản thanh toán chiếm tỷ lệ cao so với thu nhập.") else: st.info("Nhập thu nhập ở thanh bên để xem chỉ số tham khảo.") st.markdown("### 📊 Biểu đồ cơ cấu thanh toán") chart_data = df[ ["Tháng", "Gốc phải trả", "Lãi phải trả"] ].set_index("Tháng") st.bar_chart(chart_data) st.markdown("### 📉 Diễn biến dư nợ") balance_chart = df[ ["Tháng", "Dư nợ cuối kỳ"] ].set_index("Tháng") st.line_chart(balance_chart) # ===================================================== # 10. LỊCH TRẢ NỢ # ===================================================== elif page == "🧮 Lịch trả nợ": st.markdown("## 🧮 LỊCH TRẢ NỢ CHI TIẾT") st.write( "Bảng mô phỏng số tiền gốc, lãi và dư nợ theo từng tháng." ) display_df = df.copy() for col in [ "Dư nợ đầu kỳ", "Gốc phải trả", "Lãi phải trả", "Tổng phải trả", "Dư nợ cuối kỳ" ]: display_df[col] = display_df[col].round(0).astype("int64") st.dataframe( display_df, use_container_width=True, hide_index=True ) st.markdown("### 📌 Tổng kết") c1, c2, c3 = st.columns(3) c1.metric("Tổng tiền gốc", money(df["Gốc phải trả"].sum())) c2.metric("Tổng tiền lãi", money(total_interest)) c3.metric("Tổng thanh toán", money(total_payment)) csv_data = display_df.to_csv( index=False ).encode("utf-8-sig") st.download_button( "📥 Tải lịch trả nợ CSV", data=csv_data, file_name="lich_tra_no_finova.csv", mime="text/csv", use_container_width=True ) # ===================================================== # 11. SO SÁNH KHOẢN VAY # ===================================================== elif page == "⚖️ So sánh khoản vay": st.markdown("## ⚖️ SO SÁNH CÁC PHƯƠNG ÁN VAY") st.write( "Giữ nguyên số tiền và thời hạn, so sánh các mức lãi suất." ) rate_a = st.number_input( "Phương án A - lãi suất (%/năm)", min_value=0.0, max_value=50.0, value=float(interest_rate), step=0.1 ) rate_b = st.number_input( "Phương án B - lãi suất (%/năm)", min_value=0.0, max_value=50.0, value=max(0.0, float(interest_rate) - 1.0), step=0.1 ) rate_c = st.number_input( "Phương án C - lãi suất (%/năm)", min_value=0.0, max_value=50.0, value=min(50.0, float(interest_rate) + 1.0), step=0.1 ) comparison = [] for name, rate in [ ("Phương án A", rate_a), ("Phương án B", rate_b), ("Phương án C", rate_c) ]: result = calculate_loan( loan_amount, int(loan_term), rate, method ) comparison.append({ "Phương án": name, "Lãi suất (%/năm)": rate, "Tổng tiền lãi": round(result["Lãi phải trả"].sum()), "Tổng gốc + lãi": round(result["Tổng phải trả"].sum()), "Thanh toán tháng đầu": round(result.iloc[0]["Tổng phải trả"]) }) comparison_df = pd.DataFrame(comparison) st.dataframe( comparison_df.style.format({ "Lãi suất (%/năm)": "{:.2f}%", "Tổng tiền lãi": "{:,.0f} VNĐ", "Tổng gốc + lãi": "{:,.0f} VNĐ", "Thanh toán tháng đầu": "{:,.0f} VNĐ" }), use_container_width=True, hide_index=True ) st.bar_chart( comparison_df.set_index("Phương án")[["Tổng tiền lãi"]] ) best = comparison_df.loc[ comparison_df["Tổng tiền lãi"].idxmin() ] st.success( f"Phương án có tổng lãi thấp nhất trong ba mức đã nhập: " f"{best['Phương án']} — {money(best['Tổng tiền lãi'])}." ) st.caption( "Chỉ so sánh theo mức lãi suất giả định. " "Chưa tính phí, điều kiện ưu đãi hoặc các điều khoản khác." ) # ===================================================== # 12. CHATBOT # ===================================================== elif page == "🤖 Chatbot": st.markdown("## 🤖 FINOVA AI ASSISTANT") st.write( "Trợ lý hỏi đáp về khoản vay và kiến thức tài chính cơ bản." ) suggested_questions = [ "Tháng đầu phải trả bao nhiêu?", "Tổng tiền lãi là bao nhiêu?", "Dư nợ sau tháng 12 còn bao nhiêu?", "Làm sao để giảm tiền lãi?", "Trả nợ trước hạn có mất phí không?", "CIC và nợ xấu là gì?", "Vay mua nhà cần lưu ý gì?", "Khoản vay chiếm bao nhiêu phần trăm thu nhập?", "Cách tính lãi ngân hàng như thế nào?", "Vay mua ô tô cần lưu ý gì?", "Nếu chậm trả thì sao?", "Ngân hàng nào có lãi suất tốt?" ] with st.expander("💡 Câu hỏi gợi ý", expanded=True): cols = st.columns(3) for i, question in enumerate(suggested_questions): if cols[i % 3].button( question, key=f"suggest_{i}", use_container_width=True ): st.session_state["chat_input"] = question if "chat_history" not in st.session_state: st.session_state.chat_history = [] for item in st.session_state.chat_history: with st.chat_message(item["role"]): st.markdown(item["content"]) question = st.chat_input( "Nhập câu hỏi về khoản vay hoặc tài chính..." ) if "chat_input" in st.session_state: question = st.session_state.pop("chat_input") if question: st.session_state.chat_history.append({ "role": "user", "content": question }) answer = chatbot_answer( question, df, loan_amount, int(loan_term), interest_rate, loan_purpose, method, income ) st.session_state.chat_history.append({ "role": "assistant", "content": answer }) st.rerun() if st.button("🗑️ Xóa lịch sử trò chuyện"): st.session_state.chat_history = [] st.rerun() st.info( "Phiên bản này sử dụng chatbot theo bộ câu hỏi và quy tắc có sẵn; " "chưa kết nối mô hình AI trực tuyến. Các câu hỏi ngoài phạm vi " "có thể chưa được trả lời chính xác." ) # ===================================================== # 13. XUẤT BÁO CÁO # ===================================================== elif page == "📥 Xuất báo cáo": st.markdown("## 📥 BÁO CÁO KHOẢN VAY") st.write( "Kiểm tra thông tin và tải dữ liệu khoản vay về thiết bị." ) report_df = df.copy() st.dataframe( report_df.round(0), use_container_width=True, hide_index=True ) summary = f""" BÁO CÁO MÔ PHỎNG KHOẢN VAY - FINOVA Ngày lập: {datetime.now().strftime("%d/%m/%Y %H:%M")} Khách hàng: {customer_name or "Chưa nhập"} Mục đích vay: {loan_purpose} Số tiền vay: {money(loan_amount)} Thời hạn: {int(loan_term)} tháng Lãi suất: {interest_rate:.2f}%/năm Phương thức trả nợ: {method} Tổng tiền gốc: {money(report_df["Gốc phải trả"].sum())} Tổng tiền lãi: {money(total_interest)} Tổng gốc và lãi: {money(total_payment)} Thanh toán tháng đầu: {money(first_month["Tổng phải trả"])} Lưu ý: Đây là kết quả mô phỏng theo dữ liệu đã nhập. Chưa bao gồm phí, bảo hiểm và các điều kiện riêng của ngân hàng. """ st.download_button( "📄 Tải báo cáo TXT", data=summary.encode("utf-8"), file_name="bao_cao_khoan_vay_finova.txt", mime="text/plain", use_container_width=True ) csv_data = report_df.to_csv( index=False ).encode("utf-8-sig") st.download_button( "📊 Tải báo cáo CSV", data=csv_data, file_name="bao_cao_khoan_vay_finova.csv", mime="text/csv", use_container_width=True ) # Xuất Excel nếu thư viện hỗ trợ try: excel_buffer = BytesIO() with pd.ExcelWriter( excel_buffer, engine="openpyxl" ) as writer: report_df.to_excel( writer, index=False, sheet_name="Lich tra no" ) pd.DataFrame({ "Thông tin": [ "Khách hàng", "Mục đích vay", "Số tiền vay", "Thời hạn (tháng)", "Lãi suất (%/năm)", "Tổng tiền lãi", "Tổng gốc và lãi" ], "Giá trị": [ customer_name or "Chưa nhập", loan_purpose, loan_amount, int(loan_term), interest_rate, total_interest, total_payment ] }).to_excel( writer, index=False, sheet_name="Tong quan" ) st.download_button( "📗 Tải báo cáo Excel", data=excel_buffer.getvalue(), file_name="bao_cao_finova.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True ) except Exception: st.warning( "Chức năng Excel chưa hoạt động. " "Hãy kiểm tra requirements.txt; bạn vẫn có thể tải CSV hoặc TXT." ) # ===================================================== # 14. CHÂN TRANG # ===================================================== st.markdown("---") st.markdown( """ <div class="footer"> <b>FINOVA SMART BANKING</b><br> Công cụ mô phỏng khoản vay và quản lý tài chính cá nhân.<br> Kết quả chỉ mang tính tham khảo, không phải cam kết tín dụng. </div> """, unsafe_allow_html=True )
+# 1. CẤU HÌNH
+# =====================================================
+st.set_page_config(
+    page_title="FINOVA | Ngân hàng số",
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# =====================================================
+# 2. CSS - GIAO DIỆN NGÂN HÀNG
+# =====================================================
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Be Vietnam Pro', sans-serif;
+    }
+
+    .stApp {
+        background: #f3f6fc;
+    }
+
+    .block-container {
+        max-width: 1450px;
+        padding-top: 1.5rem;
+    }
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #081631, #17467b);
+    }
+
+    [data-testid="stSidebar"] * {
+        color: white;
+    }
+
+    [data-testid="stSidebar"] input {
+        color: #102344 !important;
+    }
+
+    .hero {
+        border-radius: 22px;
+        padding: 38px;
+        min-height: 275px;
+        background-size: cover;
+        background-position: center;
+        color: white;
+        box-shadow: 0 12px 35px rgba(9, 30, 66, .16);
+        margin-bottom: 25px;
+    }
+
+    .hero h1 {
+        font-size: 36px;
+        font-weight: 800;
+        color: white;
+    }
+
+    .hero p {
+        color: #e4edff;
+        font-size: 15px;
+    }
+
+    .hero-label {
+        color: #f3d28a;
+        font-weight: 700;
+        letter-spacing: 3px;
+        font-size: 12px;
+    }
+
+    .section-title {
+        font-size: 24px;
+        font-weight: 800;
+        color: #11284e;
+        margin: 12px 0;
+    }
+
+    div[data-testid="stMetric"] {
+        background: white;
+        padding: 18px;
+        border-radius: 16px;
+        border: 1px solid #e3eaf5;
+        box-shadow: 0 5px 18px rgba(20, 40, 80, .05);
+    }
+
+    div[data-testid="stMetricLabel"] {
+        color: #60718b;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #163b72;
+        font-weight: 800;
+    }
+
+    .stButton button,
+    .stDownloadButton button {
+        border-radius: 11px;
+        font-weight: 700;
+        min-height: 42px;
+    }
+
+    .stButton button[kind="primary"] {
+        background: linear-gradient(90deg, #112e60, #2869aa);
+        color: white;
+        border: none;
+    }
+
+    .footer {
+        text-align: center;
+        color: #75849b;
+        font-size: 12px;
+        padding: 25px 0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =====================================================
+# 3. HÀM ĐỊNH DẠNG
+# =====================================================
+def money(value):
+    return f"{value:,.0f} VNĐ"
+
+
+# =====================================================
+# 4. HÀM TÍNH LỊCH TRẢ NỢ
+# =====================================================
+def calculate_loan(amount, months, annual_rate, method):
+    monthly_rate = annual_rate / 100 / 12
+    balance = float(amount)
+    schedule = []
+
+    if method == "Dư nợ giảm dần - gốc chia đều":
+        principal_fixed = amount / months
+        fixed_payment = None
+    else:
+        principal_fixed = None
+        if monthly_rate == 0:
+            fixed_payment = amount / months
+        else:
+            fixed_payment = (
+                amount
+                * monthly_rate
+                * (1 + monthly_rate) ** months
+                / ((1 + monthly_rate) ** months - 1)
+            )
+
+    for month in range(1, months + 1):
+        opening_balance = balance
+        interest = opening_balance * monthly_rate
+
+        if method == "Dư nợ giảm dần - gốc chia đều":
+            principal = min(principal_fixed, opening_balance)
+        else:
+            principal = min(
+                max(fixed_payment - interest, 0),
+                opening_balance,
+            )
+
+        # Thanh toán hết phần gốc còn lại ở kỳ cuối
+        if month == months:
+            principal = opening_balance
+
+        payment = principal + interest
+        balance = max(0, opening_balance - principal)
+
+        schedule.append(
+            {
+                "Tháng": month,
+                "Dư nợ đầu kỳ": opening_balance,
+                "Gốc phải trả": principal,
+                "Lãi phải trả": interest,
+                "Tổng phải trả": payment,
+                "Dư nợ cuối kỳ": balance,
+            }
+        )
+
+    return pd.DataFrame(schedule)
+
+
+# =====================================================
+# 5. CHATBOT HỎI ĐÁP
+# =====================================================
+def chatbot_answer(
+    question,
+    df,
+    amount,
+    months,
+    rate,
+    purpose,
+    method,
+    income,
+):
+    q = question.lower().strip()
+    first = df.iloc[0]
+    last = df.iloc[-1]
+    total_interest = df["Lãi phải trả"].sum()
+    total_payment = df["Tổng phải trả"].sum()
+
+    if any(x in q for x in ["xin chào", "chào", "hello", "hi"]):
+        return (
+            "👋 Xin chào! Tôi là trợ lý FINOVA.\n\n"
+            "Bạn có thể hỏi về khoản vay, lãi suất, "
+            "lịch trả nợ, CIC, nợ xấu, trả trước hạn, "
+            "mua nhà, mua xe và cách quản lý tài chính."
+        )
+
+    if any(x in q for x in ["tháng đầu", "tháng 1", "kỳ đầu"]):
+        return (
+            f"💳 Tháng đầu bạn dự kiến trả "
+            f"{money(first['Tổng phải trả'])}.\n\n"
+            f"• Tiền gốc: {money(first['Gốc phải trả'])}\n\n"
+            f"• Tiền lãi: {money(first['Lãi phải trả'])}"
+        )
+
+    if any(x in q for x in ["tháng cuối", "kỳ cuối"]):
+        return (
+            f"📅 Tháng cuối dự kiến thanh toán "
+            f"{money(last['Tổng phải trả'])}."
+        )
+
+    if any(x in q for x in ["tổng lãi", "tiền lãi", "lãi hết"]):
+        return (
+            f"📈 Tổng lãi dự kiến: {money(total_interest)}.\n\n"
+            "Đây là kết quả mô phỏng với lãi suất cố định, "
+            "chưa bao gồm phí và các điều chỉnh của ngân hàng."
+        )
+
+    if any(
+        x in q
+        for x in ["tổng phải trả", "tổng tiền trả", "tổng thanh toán"]
+    ):
+        return f"💰 Tổng gốc và lãi dự kiến: {money(total_payment)}."
+
+    if any(x in q for x in ["số tiền vay", "vay bao nhiêu"]):
+        return f"💰 Số tiền vay hiện tại là {money(amount)}."
+
+    if any(x in q for x in ["lãi suất", "phần trăm"]):
+        return f"📈 Lãi suất đã nhập là {rate:.2f}%/năm."
+
+    if any(x in q for x in ["thời hạn", "bao lâu", "mấy tháng"]):
+        return f"📅 Thời hạn vay là {months} tháng."
+
+    if any(x in q for x in ["mục đích", "vay để làm gì"]):
+        return f"🎯 Mục đích vay đã chọn: {purpose}."
+
+    if "dư nợ" in q or "còn nợ" in q:
+        numbers = re.findall(r"\d+", q)
+        if numbers and "tháng" in q:
+            month = int(numbers[-1])
+            if 1 <= month <= months:
+                balance = df.iloc[month - 1]["Dư nợ cuối kỳ"]
+                return (
+                    f"📉 Sau khi thanh toán tháng {month}, "
+                    f"dư nợ dự kiến còn {money(balance)}."
+                )
+        return (
+            f"Dư nợ sau tháng đầu là "
+            f"{money(first['Dư nợ cuối kỳ'])}."
+        )
+
+    if any(x in q for x in ["công thức", "cách tính", "tính lãi"]):
+        return (
+            "🧮 Có hai phương thức đang được mô phỏng:\n\n"
+            "1. **Gốc chia đều:** gốc được chia đều mỗi tháng; "
+            "lãi tính trên dư nợ đầu kỳ.\n\n"
+            "2. **Niên kim:** khoản thanh toán định kỳ gần bằng nhau; "
+            "phần gốc tăng dần, phần lãi giảm dần.\n\n"
+            "Kết quả thực tế có thể khác tùy hợp đồng."
+        )
+
+    if any(x in q for x in ["giảm lãi", "tiết kiệm lãi", "ít lãi hơn"]):
+        return (
+            "💡 Bạn có thể cân nhắc vay đúng nhu cầu, "
+            "so sánh tổng chi phí giữa các ngân hàng, "
+            "chọn kỳ hạn phù hợp và kiểm tra phí trả nợ trước hạn."
+        )
+
+    if any(x in q for x in ["trả trước hạn", "tất toán sớm"]):
+        return (
+            "📌 Hãy kiểm tra phí tất toán trước hạn, "
+            "dư nợ gốc thực tế và tiền lãi đến ngày thanh toán. "
+            "Mỗi hợp đồng có thể áp dụng quy định khác nhau."
+        )
+
+    if any(x in q for x in ["trễ hạn", "chậm trả", "quá hạn"]):
+        return (
+            "⚠️ Chậm trả có thể phát sinh lãi quá hạn hoặc phí "
+            "theo hợp đồng, đồng thời ảnh hưởng lịch sử tín dụng. "
+            "Nếu gặp khó khăn, hãy liên hệ ngân hàng sớm."
+        )
+
+    if any(x in q for x in ["cic", "nợ xấu", "điểm tín dụng"]):
+        return (
+            "📋 Lịch sử tín dụng có thể ảnh hưởng đến việc xét duyệt "
+            "khoản vay. Hãy thanh toán đúng hạn và kiểm tra thông tin "
+            "qua các kênh chính thức."
+        )
+
+    if any(x in q for x in ["ngân hàng nào", "nên vay ngân hàng"]):
+        return (
+            "🏦 Khi so sánh ngân hàng, hãy kiểm tra lãi suất sau ưu đãi, "
+            "phí hồ sơ, điều kiện bảo hiểm nếu có và phí trả trước hạn. "
+            "Đừng chỉ so sánh lãi suất quảng cáo."
+        )
+
+    if any(x in q for x in ["thu nhập", "khả năng trả", "tỷ lệ trả nợ"]):
+        if income <= 0:
+            return "Hãy nhập thu nhập hàng tháng lớn hơn 0."
+
+        ratio = first["Tổng phải trả"] / income * 100
+        return (
+            f"📊 Khoản thanh toán tháng đầu chiếm "
+            f"{ratio:.2f}% thu nhập đã nhập.\n\n"
+            "Đây là chỉ số tham khảo; bạn cần tính thêm chi phí "
+            "sinh hoạt và các khoản nợ khác."
+        )
+
+    if any(x in q for x in ["bình quân", "trung bình mỗi tháng"]):
+        average = df["Tổng phải trả"].mean()
+        return f"📊 Thanh toán bình quân: {money(average)}/tháng."
+
+    if any(x in q for x in ["mua nhà", "vay mua nhà"]):
+        return (
+            "🏠 Khi vay mua nhà, hãy tính cả tiền trả trước, "
+            "chi phí pháp lý, phí ngân hàng, nội thất và quỹ dự phòng. "
+            "Nên kiểm tra lãi suất sau thời gian ưu đãi."
+        )
+
+    if any(x in q for x in ["mua xe", "vay mua ô tô"]):
+        return (
+            "🚗 Ngoài khoản trả góp, hãy dự trù bảo hiểm, "
+            "đăng ký, nhiên liệu, bảo dưỡng và phí sử dụng xe."
+        )
+
+    if any(x in q for x in ["kinh doanh", "vay vốn"]):
+        return (
+            "📈 Trước khi vay kinh doanh, hãy dự báo dòng tiền, "
+            "doanh thu, chi phí cố định và kịch bản doanh thu giảm. "
+            "Không nên dựa hoàn toàn vào doanh thu kỳ vọng."
+        )
+
+    if any(x in q for x in ["cảm ơn", "thanks"]):
+        return "😊 Rất vui được hỗ trợ bạn! Bạn có thể hỏi thêm bất cứ lúc nào."
+
+    return (
+        "🤖 Tôi có thể giúp bạn với nhiều câu hỏi hơn. "
+        "Thử hỏi một trong các câu sau:\n\n"
+        "• Tháng đầu phải trả bao nhiêu?\n"
+        "• Tổng lãi của khoản vay là bao nhiêu?\n"
+        "• Dư nợ sau tháng 12 còn bao nhiêu?\n"
+        "• Làm thế nào để giảm chi phí lãi vay?\n"
+        "• Trả nợ trước hạn có mất phí không?\n"
+        "• CIC và nợ xấu là gì?\n"
+        "• Vay mua nhà cần lưu ý gì?\n"
+        "• Khoản vay chiếm bao nhiêu phần trăm thu nhập?"
+    )
+
+
+# =====================================================
+# 6. THANH BÊN
+# =====================================================
+with st.sidebar:
+    st.markdown("# 🏦 FINOVA")
+    st.caption("SMART BANKING EXPERIENCE")
+    st.markdown("---")
+
+    st.subheader("👤 Thông tin khách hàng")
+    customer_name = st.text_input("Họ và tên")
+    income = st.number_input(
+        "Thu nhập hàng tháng (VNĐ)",
+        min_value=0,
+        value=15000000,
+        step=500000,
+    )
+
+    st.markdown("---")
+    st.subheader("💰 Thông tin khoản vay")
+
+    loan_amount = st.number_input(
+        "Số tiền vay (VNĐ)",
+        min_value=1000000,
+        max_value=1000000000000,
+        value=100000000,
+        step=5000000,
+    )
+
+    loan_term = st.number_input(
+        "Thời hạn vay (tháng)",
+        min_value=1,
+        max_value=360,
+        value=36,
+        step=1,
+    )
+
+    interest_rate = st.number_input(
+        "Lãi suất (%/năm)",
+        min_value=0.0,
+        max_value=50.0,
+        value=10.0,
+        step=0.1,
+    )
+
+    loan_purpose = st.selectbox(
+        "Mục đích vay",
+        [
+            "Vay mua nhà",
+            "Vay mua ô tô",
+            "Vay tiêu dùng",
+            "Vay kinh doanh",
+            "Vay sửa chữa nhà",
+            "Vay học tập",
+            "Vay khác",
+        ],
+    )
+
+    method = st.radio(
+        "Phương thức trả nợ",
+        [
+            "Dư nợ giảm dần - gốc chia đều",
+            "Trả đều hàng tháng - niên kim",
+        ],
+    )
+
+    st.markdown("---")
+    st.caption(
+        "FINOVA là ứng dụng mô phỏng tài chính, "
+        "không phải ngân hàng hoặc đơn vị cấp tín dụng."
+    )
+
+
+# =====================================================
+# 7. TÍNH TOÁN
+# =====================================================
+df = calculate_loan(
+    loan_amount,
+    int(loan_term),
+    interest_rate,
+    method,
+)
+
+total_interest = df["Lãi phải trả"].sum()
+total_payment = df["Tổng phải trả"].sum()
+first_month = df.iloc[0]
+
+
+# =====================================================
+# 8. ẢNH BÌA
+# =====================================================
+cover_path = Path("logo4.jpg")
+
+if cover_path.exists():
+    encoded = base64.b64encode(cover_path.read_bytes()).decode("utf-8")
+    hero_style = (
+        "background-image: linear-gradient("
+        "90deg, rgba(5,18,43,.96), rgba(8,31,65,.58)), "
+        f"url('data:image/jpeg;base64,{encoded}');"
+        "background-size:cover;background-position:center;"
+    )
+else:
+    hero_style = (
+        "background:linear-gradient(120deg,#081631,#17467b,#28689c);"
+    )
+
+st.markdown(
+    f"""
+    <div class="hero" style="{hero_style}">
+        <div class="hero-label">FINOVA • SMART BANKING</div>
+        <h1>Chủ động tài chính.<br>Vững bước tương lai.</h1>
+        <p>
+            Công cụ mô phỏng khoản vay, theo dõi lịch trả nợ
+            và quản lý chi phí tài chính.
+        </p>
+        <span style="
+            display:inline-block;
+            padding:8px 14px;
+            border:1px solid #d8b46a;
+            border-radius:30px;
+            color:#f4d99e;">
+            ✦ MINH BẠCH • TRỰC QUAN • TIỆN LỢI
+        </span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+page = st.radio(
+    "Điều hướng",
+    [
+        "📊 Tổng quan",
+        "🧮 Lịch trả nợ",
+        "⚖️ So sánh khoản vay",
+        "🤖 Chatbot",
+        "📥 Xuất báo cáo",
+    ],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+st.markdown("---")
+
+
+# =====================================================
+# 9. TỔNG QUAN
+# =====================================================
+if page == "📊 Tổng quan":
+    st.markdown(
+        '<div class="section-title">📊 TỔNG QUAN KHOẢN VAY</div>',
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💰 Số tiền vay", money(loan_amount))
+    c2.metric("📈 Tổng tiền lãi", money(total_interest))
+    c3.metric("💳 Tổng gốc + lãi", money(total_payment))
+    c4.metric("📅 Thời hạn", f"{int(loan_term)} tháng")
+
+    st.markdown("### 💳 Thanh toán tháng đầu")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tiền gốc", money(first_month["Gốc phải trả"]))
+    c2.metric("Tiền lãi", money(first_month["Lãi phải trả"]))
+    c3.metric("Tổng thanh toán", money(first_month["Tổng phải trả"]))
+
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("### 👤 Thông tin khoản vay")
+        st.write(f"**Khách hàng:** {customer_name or 'Chưa nhập'}")
+        st.write(f"**Mục đích:** {loan_purpose}")
+        st.write(f"**Lãi suất:** {interest_rate:.2f}%/năm")
+        st.write(f"**Phương thức:** {method}")
+
+    with right:
+        st.markdown("### 🛡️ Khả năng trả nợ")
+
+        if income > 0:
+            ratio = first_month["Tổng phải trả"] / income * 100
+            st.metric("Khoản trả / thu nhập", f"{ratio:.2f}%")
+            st.progress(min(ratio / 100, 1.0))
+
+            if ratio <= 30:
+                st.success("Tỷ lệ thanh toán kỳ đầu tương đối thấp.")
+            elif ratio <= 50:
+                st.warning(
+                    "Hãy cân nhắc thêm chi phí sinh hoạt và nợ khác."
+                )
+            else:
+                st.error(
+                    "Khoản thanh toán chiếm tỷ lệ cao so với thu nhập."
+                )
+        else:
+            st.info(
+                "Nhập thu nhập ở thanh bên để xem chỉ số tham khảo."
+            )
+
+    st.markdown("### 📊 Biểu đồ cơ cấu thanh toán")
+    chart_data = df[
+        ["Tháng", "Gốc phải trả", "Lãi phải trả"]
+    ].set_index("Tháng")
+    st.bar_chart(chart_data)
+
+    st.markdown("### 📉 Diễn biến dư nợ")
+    balance_chart = df[
+        ["Tháng", "Dư nợ cuối kỳ"]
+    ].set_index("Tháng")
+    st.line_chart(balance_chart)
+
+
+# =====================================================
+# 10. LỊCH TRẢ NỢ
+# =====================================================
+elif page == "🧮 Lịch trả nợ":
+    st.markdown("## 🧮 LỊCH TRẢ NỢ CHI TIẾT")
+    st.write(
+        "Bảng mô phỏng số tiền gốc, lãi và dư nợ theo từng tháng."
+    )
+
+    display_df = df.copy()
+    for col in [
+        "Dư nợ đầu kỳ",
+        "Gốc phải trả",
+        "Lãi phải trả",
+        "Tổng phải trả",
+        "Dư nợ cuối kỳ",
+    ]:
+        display_df[col] = display_df[col].round(0).astype("int64")
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("### 📌 Tổng kết")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tổng tiền gốc", money(df["Gốc phải trả"].sum()))
+    c2.metric("Tổng tiền lãi", money(total_interest))
+    c3.metric("Tổng thanh toán", money(total_payment))
+
+    csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "📥 Tải lịch trả nợ CSV",
+        data=csv_data,
+        file_name="lich_tra_no_finova.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+
+# =====================================================
+# 11. SO SÁNH KHOẢN VAY
+# =====================================================
+elif page == "⚖️ So sánh khoản vay":
+    st.markdown("## ⚖️ SO SÁNH CÁC PHƯƠNG ÁN VAY")
+    st.write(
+        "Giữ nguyên số tiền và thời hạn, so sánh các mức lãi suất."
+    )
+
+    rate_a = st.number_input(
+        "Phương án A - lãi suất (%/năm)",
+        min_value=0.0,
+        max_value=50.0,
+        value=float(interest_rate),
+        step=0.1,
+    )
+
+    rate_b = st.number_input(
+        "Phương án B - lãi suất (%/năm)",
+        min_value=0.0,
+        max_value=50.0,
+        value=max(0.0, float(interest_rate) - 1.0),
+        step=0.1,
+    )
+
+    rate_c = st.number_input(
+        "Phương án C - lãi suất (%/năm)",
+        min_value=0.0,
+        max_value=50.0,
+        value=min(50.0, float(interest_rate) + 1.0),
+        step=0.1,
+    )
+
+    comparison = []
+
+    for name, rate in [
+        ("Phương án A", rate_a),
+        ("Phương án B", rate_b),
+        ("Phương án C", rate_c),
+    ]:
+        result = calculate_loan(
+            loan_amount,
+            int(loan_term),
+            rate,
+            method,
+        )
+
+        comparison.append(
+            {
+                "Phương án": name,
+                "Lãi suất (%/năm)": rate,
+                "Tổng tiền lãi": round(result["Lãi phải trả"].sum()),
+                "Tổng gốc + lãi": round(result["Tổng phải trả"].sum()),
+                "Thanh toán tháng đầu": round(
+                    result.iloc[0]["Tổng phải trả"]
+                ),
+            }
+        )
+
+    comparison_df = pd.DataFrame(comparison)
+
+    st.dataframe(
+        comparison_df.style.format(
+            {
+                "Lãi suất (%/năm)": "{:.2f}%",
+                "Tổng tiền lãi": "{:,.0f} VNĐ",
+                "Tổng gốc + lãi": "{:,.0f} VNĐ",
+                "Thanh toán tháng đầu": "{:,.0f} VNĐ",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.bar_chart(
+        comparison_df.set_index("Phương án")[["Tổng tiền lãi"]]
+    )
+
+    best = comparison_df.loc[
+        comparison_df["Tổng tiền lãi"].idxmin()
+    ]
+    st.success(
+        "Phương án có tổng lãi thấp nhất trong ba mức đã nhập: "
+        f"{best['Phương án']} — {money(best['Tổng tiền lãi'])}."
+    )
+    st.caption(
+        "Chỉ so sánh theo mức lãi suất giả định. "
+        "Chưa tính phí, điều kiện ưu đãi hoặc các điều khoản khác."
+    )
+
+
+# =====================================================
+# 12. CHATBOT
+# =====================================================
+elif page == "🤖 Chatbot":
+    st.markdown("## 🤖 FINOVA AI ASSISTANT")
+    st.write(
+        "Trợ lý hỏi đáp về khoản vay và kiến thức tài chính cơ bản."
+    )
+
+    suggested_questions = [
+        "Tháng đầu phải trả bao nhiêu?",
+        "Tổng tiền lãi là bao nhiêu?",
+        "Dư nợ sau tháng 12 còn bao nhiêu?",
+        "Làm sao để giảm tiền lãi?",
+        "Trả nợ trước hạn có mất phí không?",
+        "CIC và nợ xấu là gì?",
+        "Vay mua nhà cần lưu ý gì?",
+        "Khoản vay chiếm bao nhiêu phần trăm thu nhập?",
+        "Cách tính lãi ngân hàng như thế nào?",
+        "Vay mua ô tô cần lưu ý gì?",
+        "Nếu chậm trả thì sao?",
+        "Ngân hàng nào có lãi suất tốt?",
+    ]
+
+    with st.expander("💡 Câu hỏi gợi ý", expanded=True):
+        cols = st.columns(3)
+        for i, question in enumerate(suggested_questions):
+            if cols[i % 3].button(
+                question,
+                key=f"suggest_{i}",
+                use_container_width=True,
+            ):
+                st.session_state["chat_input"] = question
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    for item in st.session_state.chat_history:
+        with st.chat_message(item["role"]):
+            st.markdown(item["content"])
+
+    question = st.chat_input(
+        "Nhập câu hỏi về khoản vay hoặc tài chính..."
+    )
+
+    if "chat_input" in st.session_state:
+        question = st.session_state.pop("chat_input")
+
+    if question:
+        st.session_state.chat_history.append(
+            {
+                "role": "user",
+                "content": question,
+            }
+        )
+
+        answer = chatbot_answer(
+            question,
+            df,
+            loan_amount,
+            int(loan_term),
+            interest_rate,
+            loan_purpose,
+            method,
+            income,
+        )
+
+        st.session_state.chat_history.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+        st.rerun()
+
+    if st.button("🗑️ Xóa lịch sử trò chuyện"):
+        st.session_state.chat_history = []
+        st.rerun()
+
+    st.info(
+        "Phiên bản này sử dụng chatbot theo bộ câu hỏi và quy tắc có sẵn; "
+        "chưa kết nối mô hình AI trực tuyến. Các câu hỏi ngoài phạm vi "
+        "có thể chưa được trả lời chính xác."
+    )
+
+
+# =====================================================
+# 13. XUẤT BÁO CÁO
+# =====================================================
+elif page == "📥 Xuất báo cáo":
+    st.markdown("## 📥 BÁO CÁO KHOẢN VAY")
+    st.write(
+        "Kiểm tra thông tin và tải dữ liệu khoản vay về thiết bị."
+    )
+
+    report_df = df.copy()
+    st.dataframe(
+        report_df.round(0),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    report_principal_total = report_df["Gốc phải trả"].sum()
+
+    summary = f"""
+BÁO CÁO MÔ PHỎNG KHOẢN VAY - FINOVA
+Ngày lập: {datetime.now().strftime("%d/%m/%Y %H:%M")}
+Khách hàng: {customer_name or "Chưa nhập"}
+Mục đích vay: {loan_purpose}
+Số tiền vay: {money(loan_amount)}
+Thời hạn: {int(loan_term)} tháng
+Lãi suất: {interest_rate:.2f}%/năm
+Phương thức trả nợ: {method}
+Tổng tiền gốc: {money(report_principal_total)}
+Tổng tiền lãi: {money(total_interest)}
+Tổng gốc và lãi: {money(total_payment)}
+Thanh toán tháng đầu: {money(first_month["Tổng phải trả"])}
+
+Lưu ý: Đây là kết quả mô phỏng theo dữ liệu đã nhập.
+Chưa bao gồm phí, bảo hiểm và các điều kiện riêng của ngân hàng.
+"""
+
+    st.download_button(
+        "📄 Tải báo cáo TXT",
+        data=summary.encode("utf-8"),
+        file_name="bao_cao_khoan_vay_finova.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
+
+    csv_data = report_df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "📊 Tải báo cáo CSV",
+        data=csv_data,
+        file_name="bao_cao_finova.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    # Xuất Excel nếu thư viện hỗ trợ
+    try:
+        excel_buffer = BytesIO()
+
+        with pd.ExcelWriter(
+            excel_buffer,
+            engine="openpyxl",
+        ) as writer:
+            report_df.to_excel(
+                writer,
+                index=False,
+                sheet_name="Lich tra no",
+            )
+
+            pd.DataFrame(
+                {
+                    "Thông tin": [
+                        "Khách hàng",
+                        "Mục đích vay",
+                        "Số tiền vay",
+                        "Thời hạn (tháng)",
+                        "Lãi suất (%/năm)",
+                        "Tổng tiền lãi",
+                        "Tổng gốc và lãi",
+                    ],
+                    "Giá trị": [
+                        customer_name or "Chưa nhập",
+                        loan_purpose,
+                        loan_amount,
+                        int(loan_term),
+                        interest_rate,
+                        total_interest,
+                        total_payment,
+                    ],
+                }
+            ).to_excel(
+                writer,
+                index=False,
+                sheet_name="Tong quan",
+            )
+
+        st.download_button(
+            "📗 Tải báo cáo Excel",
+            data=excel_buffer.getvalue(),
+            file_name="bao_cao_finova.xlsx",
+            mime=(
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet"
+            ),
+            use_container_width=True,
+        )
+
+    except Exception:
+        st.warning(
+            "Chức năng Excel chưa hoạt động. "
+            "Hãy kiểm tra requirements.txt; "
+            "bạn vẫn có thể tải CSV hoặc TXT."
+        )
+
+
+# =====================================================
+# 14. CHÂN TRANG
+# =====================================================
+st.markdown("---")
+st.markdown(
+    """
+    <div class="footer">
+        <b>FINOVA SMART BANKING</b><br>
+        Công cụ mô phỏng khoản vay và quản lý tài chính cá nhân.<br>
+        Kết quả chỉ mang tính tham khảo, không phải cam kết tín dụng.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
